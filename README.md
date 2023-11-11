@@ -1,4 +1,4 @@
-[![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/rderelle/fastlin)](https://github.com/rderelle/fastlin/releases)
+[![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/rderelle/skalo)](https://github.com/rderelle/skalo/releases)
 
 <h1 align="center">skalo</h1>
 
