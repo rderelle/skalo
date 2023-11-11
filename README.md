@@ -20,8 +20,10 @@ skalo will be located in the directory './target/release/'.
 ### Running skalo
 The default command line is:
 ```
-skalo -i my_splitkmer_file.skf
+skalo -i example.skf
 ```
+Using this split-kmer file, skalo will infer 100 indels/multis.
+
 
 ### Output files
 skalo output consists of 3 files:
