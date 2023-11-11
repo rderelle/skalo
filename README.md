@@ -30,6 +30,7 @@ skalo output consists of 3 files:
 + a TSV file describing all variants (similar to VCF files obtained from read-alignment)
 
 The 'pos_ali' field of the TSV file corresponds to the position of the variant in the binary alignment (0-based position). This ID number is also used to characterise variant groups in the fasta file containing the unaligned sequences (name of sequences). This common nomenclature between files should facilitate post-analyses of indels.
+
 In the cases of more than 2 variants inferred for a given variant group, the binary alignment only contains the distribution of the 2 variants detected in the highest number of samples, (i.e., the 2 most informative variants; other variant(s) represented as missing data).
 
 ### TO DO LIST
