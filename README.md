@@ -36,7 +36,7 @@ The 'pos_ali' field of the TSV file corresponds to the position of the variant i
 In the cases of more than 2 variants inferred for a given variant group, the binary alignment only contains the distribution of the 2 variants detected in the highest number of samples, (i.e., the 2 most informative variants; other variant(s) represented as missing data).
 
 ### TO DO LIST
-+ to add a dummy skf file
++ ~~to add a dummy skf file~~
 + to improve this readme file
 
 
