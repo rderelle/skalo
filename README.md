@@ -22,7 +22,7 @@ The default command line is:
 ```
 skalo -i example.skf
 ```
-Using this split-kmer file, skalo will infer 100 indels/multis.
+Using this split-kmer file, skalo infers 100 indels/multis.
 
 
 ### Output files
