@@ -4,9 +4,8 @@ use crate::utils::{rev_compl, encode_kmer, decode_kmer};
 
 
 
-pub fn identify_good_kmers(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, u64>>, index_map: &HashMap<u64, String>) -> HashMap<u8, HashSet<u128>> {
-
-    println!(" . identify good kmers");
+pub fn identify_good_kmers(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, u32>>, index_map: &HashMap<u32, String>) -> HashMap<u8, HashSet<u128>> {
+    println!(" # identify bubble extremities");
     
     let len_kmer_graph = len_kmer -1;
     let mut good_kmers: HashMap<u8, HashSet<u128>> = HashMap::new();
@@ -40,6 +39,13 @@ pub fn identify_good_kmers(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u1
         }
     }
     
+    // exit program if no extremity found (e.g. cases of weeded skf files)
+    if !good_kmers.contains_key(&1) {
+        eprintln!("\n      Error: there is no bubble extremity in this graph, hence no variant.\n");
+        std::process::exit(1);
+    }
+    
+    println!("     . {} extremity nodes", good_kmers[&1].len());
     good_kmers
 }
 
