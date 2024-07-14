@@ -11,11 +11,11 @@ skalo is a graph-based algorithm designed to infer indels and complex variants f
 
 
 ### Installation
-At the moment, you can download this repository and, once inside the downloaded directory, compile skalo with the following command:
+you can download this repository and, once inside the downloaded directory, compile skalo with cargo:
 ```
 cargo build --release
 ```
-skalo will be located in the directory './target/release/'.
+skalo will be located in the directory target/release/.
 
 ### Running skalo
 The default command line is:
