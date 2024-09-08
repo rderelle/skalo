@@ -24,11 +24,11 @@ struct Args {
     skf_file: String,
 
     /// ignore indels occuring after homopolymers of size n+
-    #[arg(short = 'n', long, default_value_t = 6)]
-    n_poly: u32,
+    #[arg(short = 'n', long)]
+    n_poly: Option<u32>,
     
     /// maximum fraction of unknown states per position 
-    #[arg(short = 'm', long, default_value_t = 0.3)]
+    #[arg(short = 'm', long, default_value_t = 0.2)]
     max_missing: f32,
 
     /// name of output files

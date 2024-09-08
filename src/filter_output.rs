@@ -4,16 +4,10 @@ use std::io::Write;
 use crate::utils::rev_compl;
 
 
-pub fn filter_output_sequences(sequences: HashMap<String, HashMap<String, Vec<String>>>, len_kmer: usize, all_samples: Vec<String>, mut n_homopolymer: u32, max_missing: f32, output_name: &str, input_name: &str) {
+pub fn filter_output_sequences(sequences: HashMap<String, HashMap<String, Vec<String>>>, len_kmer: usize, all_samples: Vec<String>, n_homopolymer: Option<u32>, max_missing: f32, output_name: &str, input_name: &str) {
     println!(" # filter sequences");
     
     let len_kmer_graph = len_kmer -1;
-    
-    // adjust n_homopolymer if higher than k-mer length to avoid the program crashing
-    if n_homopolymer > len_kmer_graph.try_into().unwrap() {
-        n_homopolymer = len_kmer_graph as u32;
-        println!("     . n_homopolymer was reduced to fit the k-mer length");
-    }
     
     // prepare output files
     let mut out_1 = File::create(format!("{}_seq_groups.fas", output_name)).expect("Failed to create file");
@@ -22,7 +16,12 @@ pub fn filter_output_sequences(sequences: HashMap<String, HashMap<String, Vec<St
     // write header of TSV variant file
     out_2.write_all(format!("#skalo version {}\n",env!("CARGO_PKG_VERSION")).as_bytes())
         .expect("Failed to write to file");
-    out_2.write_all(format!("#parameters: m={} n={}\n", max_missing, n_homopolymer).as_bytes())
+    out_2.write_all(format!("#parameters: m={}{}\n",max_missing,
+        match n_homopolymer {
+            Some(n) => format!(" n={}", n),
+            None => String::new(),
+        }
+    ).as_bytes())
         .expect("Failed to write to file");
     out_2.write_all(format!("#input file: {} (k={})\n", input_name, len_kmer).as_bytes())
         .expect("Failed to write to file");
@@ -31,7 +30,7 @@ pub fn filter_output_sequences(sequences: HashMap<String, HashMap<String, Vec<St
     let formatted_string = index_name.join(", ");
     out_2.write_all(format!("#samples: {}\n", formatted_string).as_bytes())
         .expect("Failed to write to file");
-    out_2.write_all(b"#pos_ali\tnb_states\ttype\tfirst_kmer\tvariants\tlast_kmer\tratio_missing\tsamples\n")
+    out_2.write_all(b"#pos_ali\tnb_states\ttype\tunclear_insert\tfirst_kmer\tvariants\tlast_kmer\tratio_missing\tsamples\n")
         .expect("Failed to write to file");
     
     // Prepare variables for binary alignment
@@ -43,7 +42,7 @@ pub fn filter_output_sequences(sequences: HashMap<String, HashMap<String, Vec<St
     }
     
     let mut nb_missing = 0;
-    let mut nb_multi_alis = 0;
+    let mut nb_unclear_inserts = 0;
     let mut nb_homopolymer = 0;
  
     // sequence groups 1 by 1
@@ -59,6 +58,10 @@ pub fn filter_output_sequences(sequences: HashMap<String, HashMap<String, Vec<St
         if ratio_missing > max_missing {
             nb_missing += 1;
         } else {
+            
+            /*
+            CHECK IF UNCLEAR INSERT
+            */ 
             
             // extract first kmer (using first sequence)
             let first_kmer = ll_sorted_seq[0].0[..len_kmer_graph].to_string();
@@ -77,83 +80,99 @@ pub fn filter_output_sequences(sequences: HashMap<String, HashMap<String, Vec<St
             let multiple_positions = test_multiple_positions(l_middle_bases.clone(), last_kmer.clone());
             let multiple_positions_rc = test_multiple_positions(rc_l_middle_bases, rc_last_kmer);
             
+            let mut unclear_insert = "no";
             if multiple_positions || multiple_positions_rc {
-                nb_multi_alis += 1;
-            } else {            
-                // check if indel in homopolymer (i.e. )
-                let is_homopolymer = check_homopolymer(n_homopolymer, first_kmer.clone(), l_middle_bases.clone());
-                
-                if is_homopolymer {
-                    nb_homopolymer += 1;
-                } else {
-                    // Output seq_groups
-                    for l in &ll_sorted_seq {
-                        let str_samples = l.1.join("|");
-                        out_1.write_all(format!(">{}_{}\n{}\n", position, str_samples, l.0).as_bytes())
-                        .expect("Failed to write to file");
-                    }
-                
-                    // update binary alignment ('-' = missing data; '?' = both states (= 'unknown'))
-                    let mut sample_done: HashSet<String> = HashSet::new();
-                    let mut state = 0;
-                    for l in ll_sorted_seq.iter().take(2) {
-                        // collect sample names for this sequence and update its vector in binary_seq
-                        for sample_id in &l.1 {
-                            let full_name = d_samples.get(sample_id).unwrap();
-                            sample_done.insert(full_name.clone());
-                            let sample_vec = binary_seq.get_mut(full_name).unwrap();
-                        
-                            if sample_vec.len() <= position {
-                                sample_vec.resize(position + 1, state.to_string());
-                            } else {
-                                sample_vec[position] = "?".to_string();
-                            }
-                        }
-                        // Update state
-                        state += 1;
-                    }
-                
-                    // update binary alignment with missing samples
-                    for sample in &all_samples {
-                        if !sample_done.contains(sample) {
-                            binary_seq.entry(sample.to_string()).and_modify(|vec| vec.push("-".to_string()));
-                        }
-                    }                
-                
-                    // get type of variant
-                    let mut type_variant = "complex";
-                    for xx in &l_middle_bases {
-                        if xx == "." {type_variant = "_indel_";}
-                    }
-                   
-                    // get lists of samples
-                    let mut l_samples = Vec::new();
-                    for (_, vect) in &ll_sorted_seq {
-                    
-                        // sort list of samples by equivalent integers
-                        let mut vect2 = vect.clone();
-                        vect2.sort_by(|a, b| {
-                            let a_int = a.parse::<i32>().unwrap_or(i32::MAX);
-                            let b_int = b.parse::<i32>().unwrap_or(i32::MAX);
-                            a_int.cmp(&b_int)
-                        });
-                        // save it
-                        l_samples.push(vect2.join(","));
-                    }
-                
-                    // round ratio_missing to the 2nd decimal
-                    let rounded_missing = (ratio_missing * 100.0).round() / 100.0;
+                unclear_insert = "yes";
+                nb_unclear_inserts += 1;
+            }
+            
+            /*
+            CHECK IK HOMOPOLYMER
+            */ 
 
-                    // save variants information
-                    out_2.write_all(format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-                        position, l_middle_bases.len(), type_variant, first_kmer,
-                        l_middle_bases.join(" / "), last_kmer, rounded_missing, l_samples.join(" / ")).as_bytes())
-                        .expect("Failed to write to file");
+            // check if indel in homopolymer
+            let mut is_homopolymer = false;
+            if let Some(mut n_max) = n_homopolymer {
+                // adjust n_homopolymer if higher than k-mer length to avoid the program crashing
+                if n_max > len_kmer_graph.try_into().unwrap() {
+                    n_max = len_kmer_graph as u32;
+                    println!("     . n_homopolymer was reduced to fit the k-mer length");
+                }
+                // test presence homopolymer
+                is_homopolymer = check_homopolymer(n_max, first_kmer.clone(), l_middle_bases.clone());
+            }
+                            
+            if is_homopolymer {
+                nb_homopolymer += 1;
+            } else {
+                // Output seq_groups
+                for l in &ll_sorted_seq {
+                    let str_samples = l.1.join("|");
+                    out_1.write_all(format!(">{}_{}\n{}\n", position, str_samples, l.0).as_bytes())
+                    .expect("Failed to write to file");
+                }
                 
-                    // Update position
-                    position += 1;
-                }            
+                // update binary alignment ('-' = missing data; '?' = both states (= 'unknown'))
+                let mut sample_done: HashSet<String> = HashSet::new();
+                let mut state = 0;
+                for l in ll_sorted_seq.iter().take(2) {
+                    // collect sample names for this sequence and update its vector in binary_seq
+                    for sample_id in &l.1 {
+                        let full_name = d_samples.get(sample_id).unwrap();
+                        sample_done.insert(full_name.clone());
+                        let sample_vec = binary_seq.get_mut(full_name).unwrap();
+                    
+                        if sample_vec.len() <= position {
+                            sample_vec.resize(position + 1, state.to_string());
+                        } else {
+                            sample_vec[position] = "?".to_string();
+                        }
+                    }
+                    // Update state
+                    state += 1;
+                }
+            
+                // update binary alignment with missing samples
+                for sample in &all_samples {
+                    if !sample_done.contains(sample) {
+                        binary_seq.entry(sample.to_string()).and_modify(|vec| vec.push("-".to_string()));
+                    }
+                }                
+            
+                // get type of variant
+                let mut type_variant = "complex";
+                for xx in &l_middle_bases {
+                    if xx == "." {type_variant = "_indel_";}
+                }
+               
+                // get lists of samples
+                let mut l_samples = Vec::new();
+                for (_, vect) in &ll_sorted_seq {
+                
+                    // sort list of samples by equivalent integers
+                    let mut vect2 = vect.clone();
+                    vect2.sort_by(|a, b| {
+                        let a_int = a.parse::<i32>().unwrap_or(i32::MAX);
+                        let b_int = b.parse::<i32>().unwrap_or(i32::MAX);
+                        a_int.cmp(&b_int)
+                    });
+                    // save it
+                    l_samples.push(vect2.join(","));
+                }
+            
+                // round ratio_missing to the 2nd decimal
+                let rounded_missing = (ratio_missing * 100.0).round() / 100.0;
+
+                // save variants information
+                out_2.write_all(format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                    position, l_middle_bases.len(), type_variant, unclear_insert, first_kmer,
+                    l_middle_bases.join(" / "), last_kmer, rounded_missing, l_samples.join(" / ")).as_bytes())
+                    .expect("Failed to write to file");
+            
+                // Update position
+                position += 1;
             }            
+                   
         }
     }
     
@@ -171,8 +190,9 @@ pub fn filter_output_sequences(sequences: HashMap<String, HashMap<String, Vec<St
     
     // final message
     println!("     . {} removed because of missing data", nb_missing);
-    println!("     . {} removed because of unclear insert", nb_multi_alis);
-    println!("     . {} removed because in homopolymers", nb_homopolymer);
+    if n_homopolymer.is_some() {
+        println!("     . {} removed because in homopolymers", nb_homopolymer);
+    }   
     println!("     . {} FINAL variant groups", position);
     println!("done.");
 }
@@ -288,10 +308,10 @@ fn check_homopolymer(limit_n: u32, first_kmer: String, l_middle_bases: Vec<Strin
     // extract last limit_n nucleotides of first k-mer
     let last_n_chars = &first_kmer[first_kmer.len() - limit_n as usize..];
     
-    // check if these last limit_n nucleotides are the same
+    // check if these last limit_n nucleotides are the same (ie, homopolymer)
     let char_set: HashSet<_> = last_n_chars.chars().collect();
     if char_set.len() == 1 {
-        // check if variants correspond to homopolymer
+        // check if the insert correspond to the homopolymer repeat
         'loop_middle: for middle in l_middle_bases {
             let middle_char_set: HashSet<_> = middle.chars().collect();
             if middle_char_set == char_set {
