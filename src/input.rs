@@ -87,7 +87,7 @@ pub fn read_input_file(input_file: &str) -> (usize, Vec<String>, HashMap<u128, H
                 let encoded_kmer_2 = encode_kmer(&full_kmer[1..].to_string());
                 
                 // uncomment to print network
-                //println!("{}	{}", &full_kmer[..full_kmer.len() - 1].to_string(), &full_kmer[1..].to_string());
+                // println!("{}	{}	", &full_kmer[..full_kmer.len() - 1].to_string(), &full_kmer[1..].to_string());
                 
                 all_kmers.entry(encoded_kmer_1)
                     .or_default()
@@ -98,7 +98,7 @@ pub fn read_input_file(input_file: &str) -> (usize, Vec<String>, HashMap<u128, H
                 let rc_encoded_kmer_2 = encode_kmer(&rc_kmer[1..].to_string());
 
                 // uncomment to print network
-                //println!("{}	{}", &rc_kmer[..full_kmer.len() - 1].to_string(), &rc_kmer[1..].to_string());
+                // println!("{}	{}	", &rc_kmer[..full_kmer.len() - 1].to_string(), &rc_kmer[1..].to_string());
                     
                 all_kmers.entry(rc_encoded_kmer_1)
                     .or_default()

@@ -24,7 +24,7 @@ pub fn identify_good_kmers(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u1
                             .entry(1)
                             .or_insert_with(HashSet::new)
                             .insert(kmer.clone());
-                        
+                                               
                         let dna = decode_kmer(kmer.clone(), len_kmer_graph);
                         let rc = rev_compl(&dna);
                         

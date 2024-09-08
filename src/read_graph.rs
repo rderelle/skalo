@@ -23,7 +23,7 @@ pub fn build_sequences(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, 
             kmers_to_test.push(next_kmer);
         }
         kmers_to_test.sort();
-            
+        
         // consider all nucleotides and build sequence for each of them
         for next_kmer in kmers_to_test {
             // create new sequence by adding last nucleotide of the next kmer to the main kmer
@@ -49,7 +49,7 @@ pub fn build_sequences(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, 
             let mut walking_along_path = true;
             
             while walking_along_path {   
-                                
+                
                 // compare samples of all next kmers with s_ref_samples
                 let mut good_next = Vec::new();
                 
@@ -87,6 +87,7 @@ pub fn build_sequences(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, 
                 
                 // case only 1 next kmer
                 if good_next.len() == 1 {   
+
                     // update sequence
                     let dna_next = decode_kmer(good_next[0], len_kmer_graph);
                     sequence += &dna_next.chars().last().unwrap().to_string();
@@ -107,7 +108,7 @@ pub fn build_sequences(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, 
                     
                     // save sequence if the kmer was an end kmer
                     if good_kmers.get(&2).unwrap().contains(&good_next[0]) {
-                        
+
                         // get consensus limit to rebuild s_ref_samples
                         let limit_consensus = (visited.len() as f32 * 0.5) as i32;
                 
@@ -185,7 +186,6 @@ pub fn build_sequences(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, 
     }
     
     println!("     . {} variant groups", built_sequences.len());
-    //println!("{:?}", built_sequences);
     built_sequences
 }
 
