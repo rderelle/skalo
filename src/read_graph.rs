@@ -1,9 +1,9 @@
 use hashbrown::{HashMap, HashSet};
 
-use crate::utils::{rev_compl, decode_kmer};
+use crate::utils::{rev_compl, decode_kmer, get_last_nucleotide};
 
 
-pub fn build_sequences(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, u32>>, good_kmers: &HashMap<u8, HashSet<u128>>, index_map: &HashMap<u32, String>) -> HashMap<String, HashMap<String, Vec<String>>> {
+pub fn build_sequences(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, u32>>, start_kmers: &HashSet<u128>, end_kmers: &HashSet<u128>, index_map: &HashMap<u32, String>) -> HashMap<String, HashMap<String, Vec<String>>> {
     println!(" # explore graph");
 
     let len_kmer_graph = len_kmer -1;
@@ -11,8 +11,8 @@ pub fn build_sequences(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, 
     let mut built_sequences: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
     let mut seq_done: HashSet<String> = HashSet::new();
     
-    // build sequences
-    for kmer in good_kmers.get(&1).unwrap() {
+    // build sequences from entry nodes
+    for kmer in start_kmers {
         
         // initialise container for sequences built
         let mut seq_found: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
@@ -28,9 +28,8 @@ pub fn build_sequences(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, 
         for next_kmer in kmers_to_test {
             // create new sequence by adding last nucleotide of the next kmer to the main kmer
             let mut sequence = decode_kmer(kmer.clone(), len_kmer_graph);            
-            
-            let dna = decode_kmer(next_kmer.clone(), len_kmer_graph);
-            sequence += &dna.chars().last().unwrap().to_string();            
+            let next_nucl = get_last_nucleotide(next_kmer.clone());
+            sequence += &next_nucl.to_string();
 
             // create sample variables to be used during the walk            
             let tmp_index_samples = all_kmers[kmer][next_kmer];
@@ -47,6 +46,9 @@ pub fn build_sequences(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, 
 
             let mut previous_kmer: u128 = next_kmer.clone();
             let mut walking_along_path = true;
+            
+            let mut tmp_l_index = Vec::new();
+            tmp_l_index.push(tmp_index_samples);
             
             while walking_along_path {   
                 
@@ -89,37 +91,40 @@ pub fn build_sequences(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, 
                 if good_next.len() == 1 {   
 
                     // update sequence
-                    let dna_next = decode_kmer(good_next[0], len_kmer_graph);
-                    sequence += &dna_next.chars().last().unwrap().to_string();
-                    
+                    let next_nucl = get_last_nucleotide(good_next[0]);
+                    sequence += &next_nucl.to_string();
+
                     // update set visited
                     visited.insert(good_next[0]);
                     
-                    // update d_nb_samples by incrementing the value (insert sample if not yet present)
-                    let tmp_index = all_kmers[&previous_kmer][&good_next[0]];
-                    
-                    let tmp_samples: HashSet<&str> = index_map.get(&tmp_index).unwrap().split('|').collect();
-                    for sample in tmp_samples.iter() {
-                        d_nb_samples.entry(sample).and_modify(|count| *count += 1).or_insert(1);
-                    }
-                                            
+                    tmp_l_index.push(all_kmers[&previous_kmer][&good_next[0]]);
+                                        
                     // update previous_kmer
                     previous_kmer = good_next[0].clone();
                     
                     // save sequence if the kmer was an end kmer
-                    if good_kmers.get(&2).unwrap().contains(&good_next[0]) {
+                    if end_kmers.contains(&good_next[0]) {
 
                         // get consensus limit to rebuild s_ref_samples
                         let limit_consensus = (visited.len() as f32 * 0.5) as i32;
-                
+                        
                         // build s_ref_samples with majority rule consensus
+                        for (tmp_index, tmp_count) in count_occurrences(&tmp_l_index) {                        
+                            let tmp_samples: HashSet<&str> = index_map.get(&tmp_index).unwrap().split('|').collect();
+                            for sample in tmp_samples.iter() {
+                                d_nb_samples.entry(sample).and_modify(|count| *count += tmp_count).or_insert(tmp_count);
+                            }
+                        }
+                        tmp_l_index.clear();
+                        
                         let mut s_ref_samples: HashSet<&str> = HashSet::new();
                         for (sample, nb) in &d_nb_samples {
                             if nb >= &limit_consensus {
                                 s_ref_samples.insert(&sample);
                             }
                         }
-
+                        
+                        // save sequence                                    
                         let combined_ends = format!("{}@{}", kmer, good_next[0]);
                         seq_found
                             .entry(combined_ends.clone())
@@ -210,4 +215,14 @@ fn levenshtein_distance(str1: &str, str2: &str) -> usize {
         }
     }
     dist
+}
+
+
+fn count_occurrences(vec: &Vec<u32>) -> HashMap<u32, i32> {
+    let mut count_map = HashMap::new();
+    for num in vec {
+        *count_map.entry(*num).or_insert(0) += 1;
+    }
+
+    count_map
 }
