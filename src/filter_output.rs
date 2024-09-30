@@ -42,7 +42,6 @@ pub fn filter_output_sequences(sequences: HashMap<String, HashMap<String, Vec<St
     }
     
     let mut nb_missing = 0;
-    let mut nb_unclear_inserts = 0;
     let mut nb_homopolymer = 0;
  
     // sequence groups 1 by 1
@@ -83,7 +82,6 @@ pub fn filter_output_sequences(sequences: HashMap<String, HashMap<String, Vec<St
             let mut unclear_insert = "no";
             if multiple_positions || multiple_positions_rc {
                 unclear_insert = "yes";
-                nb_unclear_inserts += 1;
             }
             
             /*
