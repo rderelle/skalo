@@ -49,13 +49,12 @@ fn main() {
     let (len_kmer, l_sample_names, all_kmers, index_map) = read_input_file(&args.skf_file);
 
     // identify 'good' kmers in De Bruijn graph
-    let good_kmers = identify_good_kmers(len_kmer, &all_kmers, &index_map);
+    let (start_kmers, end_kmers) = identify_good_kmers(len_kmer, &all_kmers, &index_map);
     
     // build sequences
-    let sequences = build_sequences(len_kmer, &all_kmers, &good_kmers, &index_map);
+    let sequences = build_sequences(len_kmer, &all_kmers, &start_kmers, &end_kmers, &index_map);
     
     // filter and output sequences
     filter_output_sequences(sequences, len_kmer, l_sample_names.clone(), args.n_poly, args.max_missing, &args.output_name, &args.skf_file);
     
 }
-
