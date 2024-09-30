@@ -4,35 +4,37 @@ use crate::utils::{rev_compl, encode_kmer, decode_kmer};
 
 
 
-pub fn identify_good_kmers(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, u32>>, index_map: &HashMap<u32, String>) -> HashMap<u8, HashSet<u128>> {
+pub fn identify_good_kmers(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, u32>>, index_map: &HashMap<u32, String>) -> (HashSet<u128>, HashSet<u128>) {
     println!(" # identify bubble extremities");
     
     let len_kmer_graph = len_kmer -1;
-    let mut good_kmers: HashMap<u8, HashSet<u128>> = HashMap::new();
-
+    
+    let mut start_kmers: HashSet<u128> = HashSet::new();
+    let mut end_kmers: HashSet<u128> = HashSet::new();
+    
     for (kmer, next_kmers_map) in all_kmers.iter() {
         if next_kmers_map.len() > 1 {
             let all_next_kmer: Vec<&u128> = next_kmers_map.keys().collect();
 
-            for (i, &next_kmer) in all_next_kmer.iter().enumerate() {
+            'i_loop: for (i, &next_kmer) in all_next_kmer.iter().enumerate() {
                 for &next_kmer2 in all_next_kmer.iter().skip(i + 1) {
                     let samples_1 = &index_map[&next_kmers_map[next_kmer]];
                     let samples_2 = &index_map[&next_kmers_map[next_kmer2]];
 
                     if compare_samples(samples_1, samples_2) {
-                        good_kmers
-                            .entry(1)
-                            .or_insert_with(HashSet::new)
-                            .insert(kmer.clone());
+                        start_kmers.insert(kmer.clone());
                                                
                         let dna = decode_kmer(kmer.clone(), len_kmer_graph);
                         let rc = rev_compl(&dna);
+
+                        //uncomment to print network
+                        //println!("{}	{}	red", &dna, &dna);
                         
-                        good_kmers
-                            .entry(2)
-                            .or_insert_with(HashSet::new)
-                            .insert(encode_kmer(&rc));
-                        break;
+                        end_kmers.insert(encode_kmer(&rc));
+
+                        //uncomment to print network
+                        //println!("{}	{}	red", &rc, &rc);
+                        break 'i_loop;
                     }
                 }
             }
@@ -40,13 +42,13 @@ pub fn identify_good_kmers(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u1
     }
     
     // exit program if no extremity found (e.g. cases of weeded skf files)
-    if !good_kmers.contains_key(&1) {
-        eprintln!("\n      Error: there is no bubble extremity in this graph, hence no variant.\n");
+    if start_kmers.is_empty() {
+        eprintln!("\n      Error: there is no entry node in this graph, hence no variant.\n");
         std::process::exit(1);
     }
     
-    println!("     . {} extremity nodes", good_kmers[&1].len());
-    good_kmers
+    println!("     . {} entry nodes", start_kmers.len());
+    (start_kmers, end_kmers)
 }
 
 
@@ -58,6 +60,3 @@ fn compare_samples(str_1: &str, str_2: &str) -> bool {
 
     diff_1 != 0 && diff_2 != 0
 }
-
-
-
