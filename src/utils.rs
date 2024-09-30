@@ -63,7 +63,15 @@ pub fn decode_kmer(encoded: u128, k: usize) -> String {
 }
 
 
-
-
-
-
+pub fn get_last_nucleotide(encoded_kmer: u128) -> char {
+    // mask the last 2 bits to get the encoded nucleotide
+    let last_bits = (encoded_kmer & 0b11) as u8;
+    // decode the nucleotide based on the 2-bit pattern
+    match last_bits {
+        0b00 => 'A',
+        0b01 => 'C',
+        0b10 => 'G',
+        0b11 => 'T',
+        _ => unreachable!(),
+    }
+}
