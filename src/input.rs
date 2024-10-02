@@ -1,6 +1,7 @@
 use hashbrown::HashMap;
 
 use ska::io_utils::load_array;
+use ska::ska_dict::bit_encoding::decode_kmer;
 
 use crate::utils::{rev_compl, encode_kmer};
 
@@ -12,59 +13,57 @@ pub fn read_input_file(input_file: &str) -> (usize, Vec<String>, HashMap<u128, H
     let ska_array = load_array::<u128>(&[input_file.to_string()], 1).expect("\nerror: coud not read the skf file\n\n");
     let sample_names = ska_array.names().to_vec();    
     let len_kmer = ska_array.kmer_len();
-   
+    let mask = (1 << (len_kmer * 2)) - 1;
+
     println!("     . {}-mers", len_kmer);
     println!("     . {} samples", sample_names.len());
     
     println!(" # build colored de Bruijn graph");
 
     // build De Bruijn graph    
-    let degenerate_code: HashMap<char, Vec<char>> = [
-        ('M', vec!['A', 'C']),
-        ('S', vec!['C', 'G']),
-        ('W', vec!['A', 'T']),
-        ('R', vec!['A', 'G']),
-        ('Y', vec!['C', 'T']),
-        ('K', vec!['G', 'T']),
-        ('B', vec!['C', 'G', 'T']),
-        ('D', vec!['A', 'G', 'T']),
-        ('H', vec!['A', 'C', 'T']),
-        ('V', vec!['A', 'C', 'G']),
-        ('N', vec!['A', 'C', 'G', 'T']),
-    ]
-    .iter()
-    .cloned()
-    .collect();
+    let degenerate_code: HashMap<u8, Vec<char>> = [
+        (b'A', vec!['A']),
+        (b'T', vec!['T']),
+        (b'G', vec!['G']),
+        (b'C', vec!['C']),
+        (b'M', vec!['A', 'C']),
+        (b'S', vec!['C', 'G']),
+        (b'W', vec!['A', 'T']),
+        (b'R', vec!['A', 'G']),
+        (b'Y', vec!['C', 'T']),
+        (b'K', vec!['G', 'T']),
+        (b'B', vec!['C', 'G', 'T']),
+        (b'D', vec!['A', 'G', 'T']),
+        (b'H', vec!['A', 'C', 'T']),
+        (b'V', vec!['A', 'C', 'G']),
+        (b'N', vec!['A', 'C', 'G', 'T']),
+    ].iter().cloned().collect();
 
     let mut all_kmers: HashMap<u128, HashMap<u128, u32>> = HashMap::new();
     let mut all_indexes: HashMap<String, u32> = HashMap::new();
     let mut index_map: HashMap<u32, String> = HashMap::new();
-    
-    let string_ska = format!("{:?}", ska_array);
-       
-    for line in string_ska.lines() {
-        // inserts is a Vect containing left kmer, right kmer and coma separated middle bases
-        let inserts: Vec<&str> = line.split('\t').collect();
         
-        let middle = inserts[2].split(',').collect::<Vec<_>>();
-        if middle.contains(&"-") {
-            let kmer_left = inserts[0];
-            let kmer_right = inserts[1];
-
-            let mut tmp_d: HashMap<char, Vec<String>> = HashMap::new();
-            for (i, nucl) in middle.iter().enumerate() {
-                if nucl != &"-" {
-                    if let Some(nucl_code) = degenerate_code.get(&nucl.chars().next().unwrap()) {
-                        for new_nucl in nucl_code {
-                            tmp_d.entry(*new_nucl).or_default().push(i.to_string());
-                        }
-                    } else {
-                        tmp_d.entry(nucl.chars().next().unwrap()).or_default().push(i.to_string());
-                    }
+    let kmer_iter = ska_array.iter();
+    
+    for (int_kmer, int_middle_base_vec) in kmer_iter {
+        
+        // select non-ubiquitous split k-mers (ie, absent in at least one sample)
+        if int_middle_base_vec.contains(&45) {
+            
+            let (kmer_left, kmer_right) = decode_kmer(len_kmer, int_kmer, mask, mask);
+                 
+            // combine samples by middle-base by using degenerate code
+            let mut middle_2_samples: HashMap<char, Vec<String>> = HashMap::new();
+            for (i, nucl) in int_middle_base_vec.iter().enumerate() {
+                // if middle-base not absent
+                if *nucl != 45 {
+                    for &new_nucl in &degenerate_code[nucl] {
+                        middle_2_samples.entry(new_nucl).or_default().push(i.to_string());
+                    }                
                 }
             }
 
-            for (nucl, l_indexes) in tmp_d.iter() {
+            for (nucl, l_indexes) in middle_2_samples.iter() {
                     
                 let str_sample_id = l_indexes.join("|");
                 let value_index: u32;
@@ -119,6 +118,3 @@ pub fn read_input_file(input_file: &str) -> (usize, Vec<String>, HashMap<u128, H
     println!("     . {} sample combinations", all_indexes.len());
     (len_kmer, sample_names, all_kmers, index_map)
 }
-
-
-
