@@ -117,10 +117,10 @@ pub fn build_sequences(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, 
                         }
                         tmp_l_index.clear();
                         
-                        let mut s_ref_samples: HashSet<&str> = HashSet::new();
+                        let mut majrule_samples: HashSet<&str> = HashSet::new();
                         for (sample, nb) in &d_nb_samples {
                             if nb >= &limit_consensus {
-                                s_ref_samples.insert(&sample);
+                                majrule_samples.insert(&sample);
                             }
                         }
                         
@@ -129,8 +129,8 @@ pub fn build_sequences(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, 
                         seq_found
                             .entry(combined_ends.clone())
                             .or_insert_with(HashMap::new)
-                            .insert(sequence.clone(), s_ref_samples.iter().cloned().map(|s| s.to_string()).collect());
-                        
+                            .insert(sequence.clone(), majrule_samples.iter().cloned().map(|s| s.to_string()).collect());
+                                   
                         // stop looking if another branch already ended on this end kmer
                         if seq_found[&combined_ends].len() > 1 {
                             walking_along_path = false;
