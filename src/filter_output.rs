@@ -1,10 +1,11 @@
 use hashbrown::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Write;
-use crate::utils::rev_compl;
+
+use crate::utils::{rev_compl, VariantInfo};
 
 
-pub fn filter_output_sequences(sequences: HashMap<String, HashMap<String, Vec<String>>>, len_kmer: usize, all_samples: Vec<String>, n_homopolymer: Option<u32>, max_missing: f32, output_name: &str, input_name: &str) {
+pub fn filter_output_sequences(variant_groups: HashMap<String, Vec<VariantInfo>>, len_kmer: usize, all_samples: Vec<String>, n_homopolymer: Option<u32>, max_missing: f32, output_name: &str, input_name: &str) {
     println!(" # filter sequences");
     
     let len_kmer_graph = len_kmer -1;
@@ -43,134 +44,126 @@ pub fn filter_output_sequences(sequences: HashMap<String, HashMap<String, Vec<St
     
     let mut nb_missing = 0;
     let mut nb_homopolymer = 0;
- 
-    // sequence groups 1 by 1
+    
+    // variant groups 1 by 1
     let mut position = 0;
-    for d_seq in sequences.values() {
+    for vec_variants in variant_groups.values() {
         
-        // sort variants by number of samples
-        let ll_sorted_seq = sort_by_nb_samples(d_seq.clone());
+        if vec_variants[0].is_snp {
         
-        // check the ratio of missing samples
-        let ratio_missing = calculate_ratio_missing(all_samples.len(), ll_sorted_seq.clone());
-        
-        if ratio_missing > max_missing {
-            nb_missing += 1;
+            // do something with SNPs
+            
         } else {
+        
+            // check the ratio of missing samples
+            let ratio_missing = calculate_ratio_missing(all_samples.len(), vec_variants.clone());
             
-            /*
-            CHECK IF UNCLEAR INSERT
-            */ 
-            
-            // extract first kmer (using first sequence)
-            let first_kmer = ll_sorted_seq[0].0[..len_kmer_graph].to_string();
-            
-            // collect 'middle-bases' and last k-mer
-            let (l_middle_bases, last_kmer) = collect_middle_bases(ll_sorted_seq.clone(), len_kmer_graph);
-            
-            // collect 'middle-bases' and last k-mer from Rev-Compl sequences
-            let ll_rc_seq: Vec<(String, Vec<String>)> = ll_sorted_seq
-                .iter()
-                .map(|(s, v)| (rev_compl(s), v.clone()))
-                .collect();
-            let (rc_l_middle_bases, rc_last_kmer) = collect_middle_bases(ll_rc_seq.clone(), len_kmer_graph);
-            
-            // test if multiple positions for last k-mer
-            let multiple_positions = test_multiple_positions(l_middle_bases.clone(), last_kmer.clone());
-            let multiple_positions_rc = test_multiple_positions(rc_l_middle_bases, rc_last_kmer);
-            
-            let mut unclear_insert = "no";
-            if multiple_positions || multiple_positions_rc {
-                unclear_insert = "yes";
-            }
-            
-            /*
-            CHECK IK HOMOPOLYMER
-            */ 
-
-            // check if indel in homopolymer
-            let mut is_homopolymer = false;
-            if let Some(mut n_max) = n_homopolymer {
-                // adjust n_homopolymer if higher than k-mer length to avoid the program crashing
-                if n_max > len_kmer_graph.try_into().unwrap() {
-                    n_max = len_kmer_graph as u32;
-                    println!("     . n_homopolymer was reduced to fit the k-mer length");
-                }
-                // test presence homopolymer
-                is_homopolymer = check_homopolymer(n_max, first_kmer.clone(), l_middle_bases.clone());
-            }
-                            
-            if is_homopolymer {
-                nb_homopolymer += 1;
+            if ratio_missing > max_missing {
+                nb_missing += 1;
             } else {
-                // Output seq_groups
-                for l in &ll_sorted_seq {
-                    let str_samples = l.1.join("|");
-                    out_1.write_all(format!(">{}_{}\n{}\n", position, str_samples, l.0).as_bytes())
-                    .expect("Failed to write to file");
+                
+                // CHECK IF UNCLEAR INSERT
+                // extract 1st kmer using 1st sequence
+                let first_kmer = vec_variants[0].sequence[..len_kmer_graph].to_string();
+                
+                // collect 'middle-bases' and last k-mer (forward and reverse-complement)
+                let (l_middle_bases, last_kmer) = collect_middle_bases(vec_variants.clone(), len_kmer_graph, false);
+                let (rc_l_middle_bases, rc_last_kmer) = collect_middle_bases(vec_variants.clone(), len_kmer_graph, true);
+                
+                // test if multiple positions exist for the last k-mer
+                let multiple_positions = test_multiple_positions(l_middle_bases.clone(), last_kmer.clone());
+                let multiple_positions_rc = test_multiple_positions(rc_l_middle_bases, rc_last_kmer);
+                
+                let mut unclear_insert = "no";
+                if multiple_positions || multiple_positions_rc {
+                    unclear_insert = "yes";
                 }
                 
-                // update binary alignment ('-' = missing data; '?' = both states (= 'unknown'))
-                let mut sample_done: HashSet<String> = HashSet::new();
-                let mut state = 0;
-                for l in ll_sorted_seq.iter().take(2) {
-                    // collect sample names for this sequence and update its vector in binary_seq
-                    for sample_id in &l.1 {
-                        let full_name = d_samples.get(sample_id).unwrap();
-                        sample_done.insert(full_name.clone());
-                        let sample_vec = binary_seq.get_mut(full_name).unwrap();
+                // CHECK IK HOMOPOLYMER
+                // check if indel in homopolymer
+                let mut is_homopolymer = false;
+                if let Some(mut n_max) = n_homopolymer {
+                    // adjust n_homopolymer if higher than k-mer length to avoid the program crashing
+                    if n_max > len_kmer_graph.try_into().unwrap() {
+                        n_max = len_kmer_graph as u32;
+                        println!("     . n_homopolymer was reduced to fit the k-mer length");
+                    }
+                    // test presence homopolymer
+                    is_homopolymer = check_homopolymer(n_max, first_kmer.clone(), l_middle_bases.clone());
+                }
+                                
+                if is_homopolymer {
+                    nb_homopolymer += 1;
+                } else {
+                    // Output seq_groups
+                    for variant in vec_variants.iter() {
+                        let str_samples = variant.maj_samples.iter().copied().collect::<Vec<_>>().join("|");
+                        out_1.write_all(format!(">{}_{}\n{}\n", position, str_samples, variant.sequence).as_bytes())
+                        .expect("Failed to write to file");
+                    }
                     
-                        if sample_vec.len() <= position {
-                            sample_vec.resize(position + 1, state.to_string());
-                        } else {
-                            sample_vec[position] = "?".to_string();
+                    // update binary alignment ('-' = missing data; '?' = both states (= 'unknown'))
+                    // only consider the 2 most frequent variants in cases of 3+
+                    let mut sample_done: HashSet<String> = HashSet::new();
+                    let mut state = 0;
+                    for variant in vec_variants.iter().take(2) {
+                        // collect sample names for this sequence and update its vector in binary_seq
+                        for sample_id in &variant.maj_samples {
+                            let full_name = d_samples.get(sample_id.to_owned()).unwrap();
+                            sample_done.insert(full_name.clone());
+                            let sample_vec = binary_seq.get_mut(full_name).unwrap();
+                            
+                            if sample_vec.len() <= position {
+                                sample_vec.resize(position + 1, state.to_string());
+                            } else {
+                                sample_vec[position] = "?".to_string();
+                            }
                         }
+                        // update number of character states
+                        state += 1;
                     }
-                    // Update state
-                    state += 1;
-                }
-            
-                // update binary alignment with missing samples
-                for sample in &all_samples {
-                    if !sample_done.contains(sample) {
-                        binary_seq.entry(sample.to_string()).and_modify(|vec| vec.push("-".to_string()));
-                    }
-                }                
-            
-                // get type of variant
-                let mut type_variant = "complex";
-                for xx in &l_middle_bases {
-                    if xx == "." {type_variant = "_indel_";}
-                }
-               
-                // get lists of samples
-                let mut l_samples = Vec::new();
-                for (_, vect) in &ll_sorted_seq {
                 
-                    // sort list of samples by equivalent integers
-                    let mut vect2 = vect.clone();
-                    vect2.sort_by(|a, b| {
-                        let a_int = a.parse::<i32>().unwrap_or(i32::MAX);
-                        let b_int = b.parse::<i32>().unwrap_or(i32::MAX);
-                        a_int.cmp(&b_int)
-                    });
-                    // save it
-                    l_samples.push(vect2.join(","));
-                }
-            
-                // round ratio_missing to the 2nd decimal
-                let rounded_missing = (ratio_missing * 100.0).round() / 100.0;
-
-                // save variants information
-                out_2.write_all(format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-                    position, l_middle_bases.len(), type_variant, unclear_insert, first_kmer,
-                    l_middle_bases.join(" / "), last_kmer, rounded_missing, l_samples.join(" / ")).as_bytes())
-                    .expect("Failed to write to file");
-            
-                // Update position
-                position += 1;
-            }            
+                    // update binary alignment with missing samples
+                    for sample in &all_samples {
+                        if !sample_done.contains(sample) {
+                            binary_seq.entry(sample.to_string()).and_modify(|vec| vec.push("-".to_string()));
+                        }
+                    }                
+                
+                    // get type of variant
+                    let mut type_variant = "complex";
+                    for xx in &l_middle_bases {
+                        if xx == "." {type_variant = "_indel_";}
+                    }
                    
+                    // get lists of samples
+                    let mut l_samples = Vec::new();
+                    for variant in vec_variants.iter() {
+                    
+                        // sort list of samples by equivalent integers
+                        let mut vect_idx = variant.maj_samples.iter().copied().collect::<Vec<_>>();
+                        vect_idx.sort_by(|a, b| {
+                            let a_int = a.parse::<i32>().unwrap_or(i32::MAX);
+                            let b_int = b.parse::<i32>().unwrap_or(i32::MAX);
+                            a_int.cmp(&b_int)
+                        });
+                        // save it
+                        l_samples.push(vect_idx.join(","));
+                    }
+                
+                    // round ratio_missing to the 2nd decimal
+                    let rounded_missing = (ratio_missing * 100.0).round() / 100.0;
+    
+                    // save variants information
+                    out_2.write_all(format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                        position, l_middle_bases.len(), type_variant, unclear_insert, first_kmer,
+                        l_middle_bases.join(" / "), last_kmer, rounded_missing, l_samples.join(" / ")).as_bytes())
+                        .expect("Failed to write to file");
+                
+                    // Update position
+                    position += 1;
+                }            
+            }
         }
     }
     
@@ -198,37 +191,42 @@ pub fn filter_output_sequences(sequences: HashMap<String, HashMap<String, Vec<St
 
 
 
-fn sort_by_nb_samples(mut map_seq: HashMap<String, Vec<String>>) -> Vec<(String, Vec<String>)> {
-    let mut vec: Vec<_> = map_seq.drain().collect();
-    vec.sort_by(|(_, v1), (_, v2)| v2.len().cmp(&v1.len())); // sort by decreasing order
-    vec
-}
-
-
-fn calculate_ratio_missing(nb_total: usize, ll_seq: Vec<(String, Vec<String>)>) -> f32 {
+fn calculate_ratio_missing(nb_total: usize, vec_variants: Vec<VariantInfo>) -> f32 {
     // initialise vector of 0
     let mut ref_samples: Vec<u32> = vec![0; nb_total];
     
-    // iterate through ll_seq to count present samples
-    for (_, samples) in ll_seq {
-        for sample in samples {
+    // iterate through vec_variants to count present samples for all variants
+    for variant in vec_variants {
+        for sample in &variant.maj_samples {
             let idx = sample.parse::<usize>().unwrap();
             ref_samples[idx] += 1;
         }
     }
 
-    // Count 'missing' samples (i.e., != 1)
+    // count 'missing' samples (i.e., count != 1)
     let missing_samples = ref_samples.iter().filter(|&&count| count != 1).count() as f32;
 
-    // Calculate ratio of missing samples
+    // calculate ratio of missing samples
     let ratio_missing = missing_samples / nb_total as f32;
     ratio_missing
-}  
+}
 
 
-fn collect_middle_bases(ll_seq: Vec<(String, Vec<String>)>, len_k_graph: usize) -> (Vec<String>, String) {
+
+fn collect_middle_bases(vec_variants: Vec<VariantInfo>, len_k_graph: usize, use_rev_complement: bool) -> (Vec<String>, String) {
     // collect all sequences without the first kmer
-    let l_reduced_seq: Vec<&str> = ll_seq.iter().map(|l| &l.0[len_k_graph..]).collect();
+    //let reduced_seq: Vec<&str> = vec_variants.iter().map(|variant| &variant.sequence[len_k_graph..]).collect();
+    let reduced_seq: Vec<String> = vec_variants
+        .iter()
+        .map(|variant| {
+            let sequence = if use_rev_complement {
+                rev_compl(&variant.sequence)
+            } else {
+                variant.sequence.clone()
+            };
+            sequence[len_k_graph..].to_string()
+        })
+        .collect();
     
     // get start position of last k-mer (i.e. find last position for which sequences differ (from the end))
     let mut identical = true;
@@ -238,7 +236,7 @@ fn collect_middle_bases(ll_seq: Vec<(String, Vec<String>)>, len_k_graph: usize) 
         n_nucl += 1;
         let mut all_ends: HashSet<String> = HashSet::new();
         // extract last n nucleotide from each seq
-        for seq in &l_reduced_seq {
+        for seq in &reduced_seq {
             if n_nucl > seq.len() {
                 identical = false;
             } else {                    
@@ -254,8 +252,8 @@ fn collect_middle_bases(ll_seq: Vec<(String, Vec<String>)>, len_k_graph: usize) 
     n_nucl -= 1;
     
     // extract last kmer (using first sequence)
-    let pos_end = l_reduced_seq[0].len() - n_nucl;
-    let mut last_kmer = l_reduced_seq[0][pos_end..].to_string();
+    let pos_end = reduced_seq[0].len() - n_nucl;
+    let mut last_kmer = reduced_seq[0][pos_end..].to_string();
     
     // the length of last k-mer might be in some very rare cases longer than expected (only observed in variants with lot of missing samples) -> truncate it
     if last_kmer.len() > len_k_graph {
@@ -264,7 +262,7 @@ fn collect_middle_bases(ll_seq: Vec<(String, Vec<String>)>, len_k_graph: usize) 
 
     // extract 'middle-bases' (remove last kmer from reduced sequences -> only middle base left)
     let mut l_middles: Vec<String> = Vec::new();
-    for seq in &l_reduced_seq {
+    for seq in &reduced_seq {
         let pos2_end = seq.len() - n_nucl;
         let mut middle_bases = &seq[..pos2_end];
         if middle_bases == "" {middle_bases = ".";}
