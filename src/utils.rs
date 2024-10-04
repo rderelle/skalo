@@ -1,4 +1,4 @@
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 
 
 
@@ -19,6 +19,35 @@ pub fn rev_compl(seq: &str) -> String {
 
     complemented_seq
 }
+
+
+pub fn rev_compl_u128(kmer: u128, k: usize) -> u128 {
+    // mask for the last 2 bits (representing one nucleotide)
+    let mask = 0b11u128;
+
+    // initialize reverse complement result
+    let mut rc_u128 = 0u128;
+
+    // for each nucleotide in the k-mer
+    for i in 0..k {
+        // get the last 2 bits (current nucleotide)
+        let nucleotide = (kmer >> (2 * i)) & mask;
+
+        // complement the nucleotide:
+        let complement = match nucleotide {
+            0b00 => 0b11, // A -> T
+            0b01 => 0b10, // C -> G
+            0b10 => 0b01, // G -> C
+            0b11 => 0b00, // T -> A
+            _ => unreachable!(),
+        };
+
+        // shift the complemented nucleotide to its reverse position
+        rc_u128 |= complement << (2 * (k - i - 1));
+    }
+    rc_u128
+}
+
 
 
 pub fn encode_kmer(kmer: &str) -> u128 {
@@ -73,5 +102,41 @@ pub fn get_last_nucleotide(encoded_kmer: u128) -> char {
         0b10 => 'G',
         0b11 => 'T',
         _ => unreachable!(),
+    }
+}
+
+
+/// structure to save variant information
+
+#[derive(Clone)]
+pub struct VariantInfo<'a> {
+    //pub entry_kmer: u128,
+    //pub exit_kmer: u128,
+    pub sequence: String,
+    pub is_snp: bool,
+    pub visited_nodes: HashSet<u128>,
+    pub count_samples: HashMap<&'a str, i32>,
+    pub maj_samples: HashSet<&'a str>,
+}
+
+impl<'a> VariantInfo<'a> {
+    pub fn new(
+        //entry_kmer: u128,
+        //exit_kmer: u128,
+        sequence: String,
+        is_snp: bool,
+        visited_nodes: HashSet<u128>,
+        count_samples: HashMap<&'a str, i32>,
+        maj_samples: HashSet<&'a str>,
+    ) -> Self {
+        VariantInfo {
+            //entry_kmer,
+            //exit_kmer,
+            sequence,
+            is_snp,
+            visited_nodes,
+            count_samples,
+            maj_samples,
+        }
     }
 }
