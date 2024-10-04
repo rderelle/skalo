@@ -1,21 +1,19 @@
 use hashbrown::{HashMap, HashSet};
+use std::str::FromStr;
 
-use crate::utils::{rev_compl, decode_kmer, get_last_nucleotide};
+use crate::utils::{decode_kmer, rev_compl_u128, get_last_nucleotide, VariantInfo};
 
 
-pub fn build_sequences(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, u32>>, start_kmers: &HashSet<u128>, end_kmers: &HashSet<u128>, index_map: &HashMap<u32, String>) -> HashMap<String, HashMap<String, Vec<String>>> {
+pub fn build_sequences<'a>(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, u32>>, start_kmers: &HashSet<u128>, end_kmers: &HashSet<u128>, index_map: &'a HashMap<u32, String>) -> HashMap<String, Vec<VariantInfo<'a>>> {
     println!(" # explore graph");
 
     let len_kmer_graph = len_kmer -1;
+    let len_snp = (2 * len_kmer_graph) + 1;
 
-    let mut built_sequences: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
-    let mut seq_done: HashSet<String> = HashSet::new();
+    let mut built_groups: HashMap<String, Vec<VariantInfo>> = HashMap::new();
     
-    // build sequences from entry nodes
+    // scan for variants from entry nodes
     for kmer in start_kmers {
-        
-        // initialise container for sequences built
-        let mut seq_found: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
         
         // get k-mers to test
         let mut kmers_to_test = Vec::<&u128>::new();
@@ -43,6 +41,7 @@ pub fn build_sequences(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, 
             // create set of visited nodes
             let mut visited: HashSet<u128> = HashSet::new();
             visited.insert(kmer.clone());
+            visited.insert(next_kmer.clone());
 
             let mut previous_kmer: u128 = next_kmer.clone();
             let mut walking_along_path = true;
@@ -91,12 +90,12 @@ pub fn build_sequences(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, 
                 if good_next.len() == 1 {   
 
                     // update sequence
-                    let next_nucl = get_last_nucleotide(good_next[0]);
-                    sequence += &next_nucl.to_string();
+                    sequence.push(get_last_nucleotide(good_next[0]));
 
-                    // update set visited
+                    // update visited nodes
                     visited.insert(good_next[0]);
                     
+                    // update visited sample combination indexes 
                     tmp_l_index.push(all_kmers[&previous_kmer][&good_next[0]]);
                                         
                     // update previous_kmer
@@ -108,7 +107,7 @@ pub fn build_sequences(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, 
                         // get consensus limit to rebuild s_ref_samples
                         let limit_consensus = (visited.len() as f32 * 0.5) as i32;
                         
-                        // build s_ref_samples with majority rule consensus
+                        // build majrule_samples with majority rule consensus
                         for (tmp_index, tmp_count) in count_occurrences(&tmp_l_index) {                        
                             let tmp_samples: HashSet<&str> = index_map.get(&tmp_index).unwrap().split('|').collect();
                             for sample in tmp_samples.iter() {
@@ -124,75 +123,94 @@ pub fn build_sequences(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, 
                             }
                         }
                         
-                        // save sequence                                    
+                        // save variant to variant group                                    
                         let combined_ends = format!("{}@{}", kmer, good_next[0]);
-                        seq_found
-                            .entry(combined_ends.clone())
-                            .or_insert_with(HashMap::new)
-                            .insert(sequence.clone(), majrule_samples.iter().cloned().map(|s| s.to_string()).collect());
-                                   
-                        // stop looking if another branch already ended on this end kmer
-                        if seq_found[&combined_ends].len() > 1 {
+                        
+                        let variant = VariantInfo::new(
+                            //kmer.clone(),
+                            //good_next[0].clone(),
+                            sequence.clone(),
+                            false,
+                            visited.clone(),
+                            d_nb_samples.clone(),
+                            majrule_samples,
+                        );
+                        
+                        built_groups.entry(combined_ends.clone())
+                            .or_insert_with(Vec::new)
+                            .push(variant);
+                        
+                        // stop looking if another branch already ended on this exit kmer
+                        if built_groups[&combined_ends].len() > 1 {
                             walking_along_path = false;
                         }
                     }
-                // case no next kmer or several good next kmers
+                // case where no next kmer or several possible next kmers
                 } else {
                     walking_along_path = false;
                 }
             }            
             
         }
+    }
+        
+    // process variant groups
+    let mut final_groups: HashMap<String, Vec<VariantInfo>> = HashMap::new();
+    let mut nb_snps = 0;
 
-        // check built sequences
-        for (combined_ends, d_seq) in seq_found.iter() {
-            if d_seq.len() > 1 {
-                // check that the pair of sequences isn't a snp (i.e., same length AND levenshtein distance = 1)
-                let mut not_a_snp = false;
-                let l_seq: Vec<&String> = d_seq.keys().collect();
-                for (i, seq1) in l_seq.iter().enumerate() {
-                    for seq2 in l_seq.iter().skip(i + 1) {
-                        if seq1.len() == seq2.len() {
-                            if levenshtein_distance(seq1, seq2) != 1 {
-                                not_a_snp = true;
-                                break;
-                            }
-                        } else {
-                            not_a_snp = true;
-                            break;
-                        }
-                    }
+    for (extremities_combined, vec_variant) in built_groups.iter_mut() {
+    
+        //only consider groups with 2+ variants
+        if vec_variant.len() > 1 {
+        
+            // remove duplicated groups (reverse-complement) by selecting the group with highest number of maj-rule samples (-> stability of output)
+            let mut to_save = false;
+            let mut to_replace = false;
+            
+            let rc_extremities = convert_combined(extremities_combined, len_kmer_graph).unwrap();
+            
+            if final_groups.contains_key(&rc_extremities) {
+                 let nb1_majrule_samples: usize = vec_variant.iter().map(|variant| variant.maj_samples.len()).sum();
+                 let vec_variant2 = final_groups.get(&rc_extremities).unwrap();
+                 let nb2_majrule_samples: usize = vec_variant2.iter().map(|variant| variant.maj_samples.len()).sum();
+                 
+                 if nb1_majrule_samples > nb2_majrule_samples {
+                     to_replace = true;
+                     // delete rev-compl group
+                     final_groups.remove(&rc_extremities);
+                 }
+            } else {
+                to_save = true;
+            }
+        
+            if to_save || to_replace {
+                // check if variant group is a SNP
+                let seq_lengths: Vec<usize> = vec_variant.iter().map(|variant| variant.sequence.len()).collect();
+                if seq_lengths.iter().all(|&len| len == len_snp) {
+                     // update all variants
+                     for variant in vec_variant.iter_mut() {
+                         variant.is_snp = true;
+                     }
+                     // update number of SNPS if not replacement
+                     if to_save {nb_snps += 1;}
                 }
-
-                if not_a_snp {
-                    // check if reverse complement already done
-                    let mut new_d: HashMap<String, Vec<String>> = HashMap::new();
-                    for (seq, l_samples) in d_seq.iter() {
-                        let rc_seq = rev_compl(seq);
-                        if !seq_done.contains(&rc_seq) {
-                            new_d.insert(seq.clone(), l_samples.clone());
-                            seq_done.insert(seq.clone());
-                        }
-                    }
-
-                    // save sequences if still more than one sequence
-                    if new_d.len() > 1 {
-                        for (seq, l_samples) in new_d.iter() {
-                            seq_done.insert(seq.clone());
-                            built_sequences
-                                .entry(combined_ends.clone())
-                                .or_insert_with(HashMap::new)
-                                .insert(seq.clone(), l_samples.clone());
-                        }
-                    }
-                }
+                
+                // sort vector of variants by their number of samples (decreasing order)
+                vec_variant.sort_by(|a, b| b.maj_samples.len().cmp(&a.maj_samples.len()));
+                
+                // finally save the variant group
+                final_groups.insert(extremities_combined.clone(), vec_variant.clone());
+                
             }
         }
     }
     
-    println!("     . {} variant groups", built_sequences.len());
-    built_sequences
+    println!("     . {} snps", nb_snps);
+    println!("     . {} indels/complex", final_groups.len() - nb_snps);
+    final_groups
 }
+
+
 
 
 fn jaccard_similarity(set1: &HashSet<&str>, set2: &HashSet<&str>) -> f32 {
@@ -203,26 +221,27 @@ fn jaccard_similarity(set1: &HashSet<&str>, set2: &HashSet<&str>) -> f32 {
 }
 
 
-fn levenshtein_distance(str1: &str, str2: &str) -> usize {
-    // returns the levenshtein distance between 2 strings
-    let l1: Vec<char> = str1.chars().collect();
-    let l2: Vec<char> = str2.chars().collect();
-    let mut dist = 0;
-
-    for (i, nucl) in l1.iter().enumerate() {
-        if nucl != &l2[i] {
-            dist += 1;
-        }
-    }
-    dist
-}
-
 
 fn count_occurrences(vec: &Vec<u32>) -> HashMap<u32, i32> {
     let mut count_map = HashMap::new();
     for num in vec {
         *count_map.entry(*num).or_insert(0) += 1;
     }
-
     count_map
+}
+
+
+
+fn convert_combined(input: &str, k: usize) -> Result<String, String> {
+    let parts: Vec<&str> = input.split('@').collect();
+    
+    // parse the u128 values from the string parts
+    let u128_1 = u128::from_str(parts[0]).map_err(|e| e.to_string())?;
+    let u128_2 = u128::from_str(parts[1]).map_err(|e| e.to_string())?;
+        
+    // compute the reverse complements for both u128 values using the same k
+    let rev_compl_1 = rev_compl_u128(u128_1, k);
+    let rev_compl_2 = rev_compl_u128(u128_2, k);
+    
+    Ok(format!("{}@{}", rev_compl_2, rev_compl_1))
 }
