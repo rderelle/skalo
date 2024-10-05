@@ -22,7 +22,7 @@ The default command line is:
 ```
 skalo -i example.skf
 ```
-Using this split-kmer file, skalo infers 104 indels and complex variants.
+Using this split-kmer file, skalo infers 114 indels and complex variants.
 
 
 ### Output files
