@@ -1,247 +1,285 @@
 use hashbrown::{HashMap, HashSet};
-use std::str::FromStr;
+//use std::time::Instant;
+use bit_set::BitSet;
 
-use crate::utils::{decode_kmer, rev_compl_u128, get_last_nucleotide, VariantInfo};
+use rayon::prelude::*;
+use rayon::ThreadPoolBuilder;
+use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
+use indicatif::{ProgressBar, ProgressStyle};
+
+use crate::utils::{decode_kmer, get_last_nucl, VariantInfo, DnaSequence, DATA_INFO, CONFIG};
+use crate::compaction::compact_graph;
+use crate::process_variants::analyse_variant_groups;
 
 
-pub fn build_sequences<'a>(len_kmer: usize, all_kmers: &HashMap<u128, HashMap<u128, u32>>, start_kmers: &HashSet<u128>, end_kmers: &HashSet<u128>, index_map: &'a HashMap<u32, String>) -> HashMap<String, Vec<VariantInfo<'a>>> {
+pub fn build_variant_groups(mut all_kmers: HashMap<u128, Vec<u128>>, start_kmers: HashSet<u128>, end_kmers: HashSet<u128>, kmer_2_samples: HashMap<u128, BitSet>) {
+    
+    
+    let arguments = CONFIG.get().unwrap();
+    let data_info = DATA_INFO.get().unwrap();
+    
+    println!(" # compact graph");
+        
+    let compacted = compact_graph(&mut all_kmers, &start_kmers, &end_kmers);
+
     println!(" # explore graph");
-
-    let len_kmer_graph = len_kmer -1;
-    let len_snp = (2 * len_kmer_graph) + 1;
-
-    let mut built_groups: HashMap<String, Vec<VariantInfo>> = HashMap::new();
     
-    // scan for variants from entry nodes
-    for kmer in start_kmers {
+    //let start = Instant::now();
+    
+    let built_groups = Arc::new(Mutex::new(HashMap::<(u128, u128), Vec<VariantInfo>>::new()));
+    
+    let pool = ThreadPoolBuilder::new().num_threads(arguments.nb_threads).build().unwrap();
+    
+    let pb = ProgressBar::new(start_kmers.len().try_into().unwrap());
+    let sty = ProgressStyle::with_template("   {bar:60.cyan/blue} {pos:>7}/{len:7} {msg}",).unwrap().progress_chars("##-");
+    pb.set_style(sty);
+    let counter_pb = AtomicUsize::new(0);
         
-        // get k-mers to test
-        let mut kmers_to_test = Vec::<&u128>::new();
-        for (next_kmer, _) in all_kmers.get(kmer).unwrap().iter() {
-            kmers_to_test.push(next_kmer);
-        }
-        kmers_to_test.sort();
-        
-        // consider all nucleotides and build sequence for each of them
-        for next_kmer in kmers_to_test {
-            // create new sequence by adding last nucleotide of the next kmer to the main kmer
-            let mut sequence = decode_kmer(kmer.clone(), len_kmer_graph);            
-            let next_nucl = get_last_nucleotide(next_kmer.clone());
-            sequence += &next_nucl.to_string();
-
-            // create sample variables to be used during the walk            
-            let tmp_index_samples = all_kmers[kmer][next_kmer];
-            let sample_set_ref: HashSet<&str> = index_map.get(&tmp_index_samples).unwrap().split('|').collect();
-            
-            let mut d_nb_samples: HashMap<&str, i32> = HashMap::new();
-            for sample in sample_set_ref.iter() {
-                *d_nb_samples.entry(sample).or_insert(0) += 1;
+    pool.install(|| {
+        start_kmers.par_iter().for_each(|kmer| {
+            if counter_pb.fetch_add(1, Ordering::SeqCst) % 1000 == 0 {
+                pb.inc(1000);
             }
             
-            // create set of visited nodes
-            let mut visited: HashSet<u128> = HashSet::new();
-            visited.insert(kmer.clone());
-            visited.insert(next_kmer.clone());
+            let mut tmp_container: HashMap<u128, Vec<Vec<u128>>> = HashMap::new();
 
-            let mut previous_kmer: u128 = next_kmer.clone();
-            let mut walking_along_path = true;
+            let mut good_next: Vec<u128> = Vec::with_capacity(2);
             
-            let mut tmp_l_index = Vec::new();
-            tmp_l_index.push(tmp_index_samples);
-            
-            while walking_along_path {   
+            for starting_kmer in all_kmers.get(kmer).unwrap().iter() {
                 
-                // compare samples of all next kmers with s_ref_samples
-                let mut good_next = Vec::new();
+                let mut visited = HashSet::new();
+                visited.insert(*kmer);
+                visited.insert(*starting_kmer);
                 
-                if let Some(next_kmer_data) = all_kmers.get(&previous_kmer) {
-                    // get among next kmer(s) those that were not already visited
-                    let mut kmer2_to_test = Vec::new();
-                    for kmer2 in next_kmer_data.keys() {
-                        // we ignore already visited kmers to avoid endless loops
-                        if !visited.contains(kmer2) {
-                            kmer2_to_test.push(kmer2.clone());
-                        }
-                    }
-                    
-                    // if only 1 kmer -> save it; if not -> compute Jaccard similarity
-                    if kmer2_to_test.len() == 1 {
-                        good_next.extend_from_slice(&kmer2_to_test);
-                    } else {
-                        // /*  uncomment here and below to remove the path selection based on Jaccard similarity
-                        let mut max_sim = 0.0;
-                        for kmer2 in kmer2_to_test {
-                            let index_samples = next_kmer_data.get(&kmer2).unwrap();
-                            let s_samples: HashSet<&str> = index_map.get(index_samples).unwrap().split('|').collect();
-                            let sim = jaccard_similarity(&sample_set_ref, &s_samples);
-                            if sim > max_sim {
-                                good_next.clear();
-                                good_next.push(kmer2.clone());
-                                max_sim = sim;
-                            } else if sim == max_sim {
-                                good_next.push(kmer2.clone());
-                            }
-                        }
-                        // */
-                    }
+                let mut vec_visited = vec![*kmer, *starting_kmer];
+                
+                // add compacted nodes
+                if compacted.contains_key(starting_kmer) {
+                    let vec_compacted = compacted.get(starting_kmer).unwrap();
+                    vec_visited.extend(vec_compacted.iter());
                 }
                 
-                // case only 1 next kmer
-                if good_next.len() == 1 {   
+                // Initialize the stack with the starting kmer
+                let mut stack = vec![PathState {
+                    current_kmer: *starting_kmer,
+                    visited,
+                    vec_visited,
+                    depth: 0,
+                }];
+                
+                // Process each path in the stack
+                while let Some(path_state) = stack.pop() {
+                    let PathState {
+                        mut current_kmer,
+                        mut visited,
+                        mut vec_visited,
+                        depth,
+                    } = path_state;
 
-                    // update sequence
-                    sequence.push(get_last_nucleotide(good_next[0]));
+                    if depth > arguments.max_depth {
+                        continue;
+                    }
 
-                    // update visited nodes
-                    visited.insert(good_next[0]);
+                    let mut walking_along_path = true;
                     
-                    // update visited sample combination indexes 
-                    tmp_l_index.push(all_kmers[&previous_kmer][&good_next[0]]);
-                                        
-                    // update previous_kmer
-                    previous_kmer = good_next[0].clone();
+                    while walking_along_path {
+                        good_next.truncate(0);
+                        if let Some(next_kmer_data) = all_kmers.get(&current_kmer) {
+                            // add next kmers that have not yet been visited 
+                            for &kmer2 in next_kmer_data {
+                                if !visited.contains(&kmer2) {
+                                    good_next.push(kmer2);
+                                }
+                            }                        
+                        }
+ 
+                        match good_next.len() {
+                            1 => {
+                                // single path continuation
+                                let next = good_next[0];
+                                visited.insert(next);
+                                vec_visited.push(next);
+                                current_kmer = next;
+                                
+                                // add compacted nodes
+                                if compacted.contains_key(&next) {
+                                    let vec_compacted = compacted.get(&next).unwrap();
+                                    vec_visited.extend(vec_compacted.iter());
+                                }
+                                
+                                if end_kmers.contains(&next) {
+                                    // save possible variant
+                                    tmp_container.entry(next).or_default().push(vec_visited.clone());
+                                }
+                            }
+                            len if len > 1 => {
+                                // multiple paths -> push each onto the stack if not exit nodes
+                                for next in &good_next {
+                                    let mut new_visited = visited.clone();
+                                    new_visited.insert(*next);
+                        
+                                    let mut new_vec_visited = vec_visited.clone();
+                                    new_vec_visited.push(*next);
+                                    
+                                    // add compacted nodes
+                                    if compacted.contains_key(next) {
+                                        let vec_compacted = compacted.get(next).unwrap();
+                                        new_vec_visited.extend(vec_compacted.iter());
+                                    }
+                                    
+                                    // save possible variant
+                                    if end_kmers.contains(next) {
+                                        tmp_container.entry(*next).or_insert_with(Vec::new).push(new_vec_visited.clone());
+                                    }
+                                    
+                                    // initiate new path
+                                    if walking_along_path {
+                                        stack.push(PathState {
+                                            current_kmer: *next,
+                                            visited: new_visited,
+                                            vec_visited: new_vec_visited,
+                                            depth: depth + 1,
+                                        });                        
+                                    }
+                                }
+                                // stop current path exploration after branching
+                                walking_along_path = false;
+                            }
+                            _ => {
+                                // no further paths
+                                walking_along_path = false;
+                            }
+                        }                                                
+                    }
+                }
+            }
+            
+            // save variants if at least a vector with 2+ elements for one exit k-mer
+            if tmp_container.values().any(|v| v.len() > 1) {
+                
+                // prepare variant container
+                let mut tmp_container_2: HashMap<(u128,u128), Vec<VariantInfo>> = HashMap::new();
+                
+                // check-filter-build variant groups
+                for (exit_kmer, vec_variants) in tmp_container.iter() {
                     
-                    // save sequence if the kmer was an end kmer
-                    if end_kmers.contains(&good_next[0]) {
+                    // collect second to last kmer of each variant in a hashset -> test if at least 2 (ie, the variants end on a difference)
+                    let second_set: HashSet<u128> = vec_variants.iter().map(|v| v[1]).collect();
+                    let second_to_last_set: HashSet<u128> = vec_variants.iter().map(|v| v[v.len() - 2]).collect();
+                    
+                    if second_set.len() > 1 && second_to_last_set.len() > 1 {
+                        if let Some(most_common_length) = most_abundant_length(vec_variants) {
+                            let filtered_variants: Vec<_> = if vec_variants.len() == 2 {
+                                vec_variants.clone()
+                            } else {
+                                vec_variants
+                                    .iter()
+                                    .filter(|v| v.len() == most_common_length)
+                                    .cloned()
+                                    .collect()
+                            };
+                            
+                            let combined_ends: (u128, u128) = (*kmer, *exit_kmer);
 
-                        // get consensus limit to rebuild s_ref_samples
-                        let limit_consensus = (visited.len() as f32 * 0.5) as i32;
-                        
-                        // build majrule_samples with majority rule consensus
-                        for (tmp_index, tmp_count) in count_occurrences(&tmp_l_index) {                        
-                            let tmp_samples: HashSet<&str> = index_map.get(&tmp_index).unwrap().split('|').collect();
-                            for sample in tmp_samples.iter() {
-                                d_nb_samples.entry(sample).and_modify(|count| *count += tmp_count).or_insert(tmp_count);
-                            }
-                        }
-                        tmp_l_index.clear();
-                        
-                        let mut majrule_samples: HashSet<&str> = HashSet::new();
-                        for (sample, nb) in &d_nb_samples {
-                            if nb >= &limit_consensus {
-                                majrule_samples.insert(&sample);
-                            }
-                        }
-                        
-                        // save variant to variant group                                    
-                        let combined_ends = format!("{}@{}", kmer, good_next[0]);
-                        
-                        let variant = VariantInfo::new(
-                            //kmer.clone(),
-                            //good_next[0].clone(),
-                            sequence.clone(),
-                            false,
-                            visited.clone(),
-                            d_nb_samples.clone(),
-                            majrule_samples,
-                        );
-                        
-                        built_groups.entry(combined_ends.clone())
-                            .or_insert_with(Vec::new)
-                            .push(variant);
-                        
-                        // stop looking if another branch already ended on this exit kmer
-                        if built_groups[&combined_ends].len() > 1 {
-                            walking_along_path = false;
+                            // build variants 1 by 1
+                            for vec_visited in filtered_variants {
+                                
+                                // build sequence
+                                let mut sequence = String::with_capacity(vec_visited.len() + data_info.k_graph -1);
+                                sequence.push_str(&decode_kmer(*kmer, data_info.k_graph));
+                                let mut vec_snps: Vec<usize> = Vec::new();  
+                                for (i, next) in vec_visited.iter().enumerate() {
+                                    if i!= 0 {  // 1st corresponds to entry k-mer
+                                        sequence.push(get_last_nucl(*next));
+                                    }
+                                    if start_kmers.contains(next) && i <= (vec_visited.len() - data_info.k_graph) {
+                                        vec_snps.push(i + data_info.k_graph);
+                                    } else if end_kmers.contains(next) {
+                                        vec_snps.push(i -1);
+                                    }
+                                } 
+                                
+                                // save variant to container
+                                let variant = VariantInfo::new(
+                                    DnaSequence::encode(&sequence),
+                                    vec_snps,
+                                );  
+
+                                tmp_container_2.entry(combined_ends)
+                                    .or_default()
+                                    .push(variant);
+                            }                        
                         }
                     }
-                // case where no next kmer or several possible next kmers
-                } else {
-                    walking_along_path = false;
+                }  
+                // save it to main variable       
+                if !tmp_container_2.is_empty() {
+                    let mut built_groups_locked = built_groups.lock().unwrap();
+                    built_groups_locked.extend(tmp_container_2);
+                }    
+            }
+        });
+    });
+    
+    //let duration = start.elapsed();
+    //println!("time taken: {:?}", duration);
+    
+    let built_groups_end = built_groups.lock().unwrap();
+    
+    println!("     . {} variant groups", built_groups_end.len());    
+    
+    // at least one of the 2 branches of an indel should have a size below or equal to this (indel and other >= (1 + 2 * data_info.k_graph))
+    let min_indel = 2 * data_info.k_graph;
+    
+    // separate indels from the other variants
+    let mut final_groups: HashMap<(u128,u128), Vec<VariantInfo>> = HashMap::new();
+    let mut final_indels: HashMap<(u128,u128), Vec<VariantInfo>> = HashMap::new();
+    
+    for (extremities_combined, vec_variant) in built_groups_end.iter() {
+        // test if variant is an indel
+        if vec_variant.len() < 2 {
+            continue;
+        } else if vec_variant.len() == 2 && vec_variant[0].sequence.len() != vec_variant[1].sequence.len() {
+            let mut is_indel = false;
+            for variant in vec_variant {
+                if variant.sequence.len() <= min_indel {
+                    is_indel = true;
                 }
-            }            
-            
+            }
+            if is_indel {
+                final_indels.insert(*extremities_combined, vec_variant.clone());
+            }
+        } else {
+            final_groups.insert(*extremities_combined, vec_variant.clone());
         }
     }
-        
-    // process variant groups
-    let mut final_groups: HashMap<String, Vec<VariantInfo>> = HashMap::new();
-    let mut nb_snps = 0;
-
-    for (extremities_combined, vec_variant) in built_groups.iter_mut() {
     
-        //only consider groups with 2+ variants
-        if vec_variant.len() > 1 {
-        
-            // remove duplicated groups (reverse-complement) by selecting the group with highest number of maj-rule samples (-> stability of output)
-            let mut to_save = false;
-            let mut to_replace = false;
-            
-            let rc_extremities = convert_combined(extremities_combined, len_kmer_graph).unwrap();
-            
-            if final_groups.contains_key(&rc_extremities) {
-                 let nb1_majrule_samples: usize = vec_variant.iter().map(|variant| variant.maj_samples.len()).sum();
-                 let vec_variant2 = final_groups.get(&rc_extremities).unwrap();
-                 let nb2_majrule_samples: usize = vec_variant2.iter().map(|variant| variant.maj_samples.len()).sum();
-                 
-                 if nb1_majrule_samples > nb2_majrule_samples {
-                     to_replace = true;
-                     // delete rev-compl group
-                     final_groups.remove(&rc_extremities);
-                 }
-            } else {
-                to_save = true;
-            }
-        
-            if to_save || to_replace {
-                // check if variant group is a SNP
-                let seq_lengths: Vec<usize> = vec_variant.iter().map(|variant| variant.sequence.len()).collect();
-                if seq_lengths.iter().all(|&len| len == len_snp) {
-                     // update all variants
-                     for variant in vec_variant.iter_mut() {
-                         variant.is_snp = true;
-                     }
-                     // update number of SNPS if not replacement
-                     if to_save {nb_snps += 1;}
-                }
-                
-                // sort vector of variants by their number of samples (decreasing order)
-                vec_variant.sort_by(|a, b| b.maj_samples.len().cmp(&a.maj_samples.len()));
-                
-                // finally save the variant group
-                final_groups.insert(extremities_combined.clone(), vec_variant.clone());
-                
-            }
-        }
+    // infer variants
+    analyse_variant_groups(final_groups, final_indels, kmer_2_samples);
+}
+
+
+
+// find the most abundant length in a vector of variants
+fn most_abundant_length(vec_variants: &[Vec<u128>]) -> Option<usize> {
+    let mut length_counts = std::collections::HashMap::new();
+
+    // count the frequency of each length
+    for variant in vec_variants {
+        *length_counts.entry(variant.len()).or_insert(0) += 1;
     }
-    
-    println!("     . {} snps", nb_snps);
-    println!("     . {} indels/complex", final_groups.len() - nb_snps);
-    final_groups
+
+    // find the length with the maximum count
+    length_counts.into_iter().max_by_key(|&(_, count)| count).map(|(length, _)| length)
 }
 
 
 
-
-fn jaccard_similarity(set1: &HashSet<&str>, set2: &HashSet<&str>) -> f32 {
-    // returns the Jaccard similarity value between 2 sets
-    let intersection_size = set1.intersection(set2).count() as f32;
-    let union_size = (set1.len() as f32 + set2.len() as f32 - intersection_size) as f32;
-    intersection_size / union_size
+// structure to hold state for each path in the stack
+pub struct PathState {
+    current_kmer: u128,
+    visited: HashSet<u128>,
+    vec_visited: Vec<u128>,
+    depth: usize,
 }
 
-
-
-fn count_occurrences(vec: &Vec<u32>) -> HashMap<u32, i32> {
-    let mut count_map = HashMap::new();
-    for num in vec {
-        *count_map.entry(*num).or_insert(0) += 1;
-    }
-    count_map
-}
-
-
-
-fn convert_combined(input: &str, k: usize) -> Result<String, String> {
-    let parts: Vec<&str> = input.split('@').collect();
-    
-    // parse the u128 values from the string parts
-    let u128_1 = u128::from_str(parts[0]).map_err(|e| e.to_string())?;
-    let u128_2 = u128::from_str(parts[1]).map_err(|e| e.to_string())?;
-        
-    // compute the reverse complements for both u128 values using the same k
-    let rev_compl_1 = rev_compl_u128(u128_1, k);
-    let rev_compl_2 = rev_compl_u128(u128_2, k);
-    
-    Ok(format!("{}@{}", rev_compl_2, rev_compl_1))
-}
