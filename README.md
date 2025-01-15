@@ -21,7 +21,7 @@ To infer SNPs from a skf file:
 ```
 skalo -i my_file.skf
 ```
-To infer SNPs from a skf file and mapped them on a reference genome:
+To infer SNPs from a skf file and map them on a reference genome:
 ```
 skalo -i my_file.skf -r reference_genome.fas -m 0.4
 ```
